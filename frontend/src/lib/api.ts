@@ -1,73 +1,116 @@
 import { Movie, SearchMoviesResponse, FavoritesResponse } from '@/types/movie';
-
-// BUG: Hardcoded API URL, should use env var
-const API_BASE_URL = 'http://localhost:3001/movies';
+import { API_CONFIG, HTTP_STATUS } from '@/constants';
+import { handleApiError, handleNetworkError } from '@/utils/apiErrorHandler';
 
 export const movieApi = {
   searchMovies: async (query: string, page: number = 1): Promise<SearchMoviesResponse> => {
-    // BUG: No input validation
-    // BUG: No error handling for network errors
-    // BUG: Missing encodeURIComponent - will break with special characters
-    const response = await fetch(`${API_BASE_URL}/search?q=${query}&page=${page}`);
-
-    // BUG: Doesn't check response.ok before parsing
-    // BUG: If response is not OK, response.json() might fail or return error object
-    const data = await response.json();
-    
-    // BUG: Backend returns HttpException object when there's an error, not {error: ...}
-    // This check will never catch backend errors properly
-    if (data.error) {
-      throw new Error(data.error);
+    if (!query || typeof query !== 'string' || !query.trim()) {
+      throw new Error('Query is required and cannot be empty');
     }
-    
-    // BUG: If backend returns error (HttpException object), it's returned as data
-    // No check for response.status or response.ok
-    return data;
+    if (!Number.isInteger(page) || page < 1) {
+      throw new Error('Page must be a positive integer');
+    }
+
+    try {
+      const response = await fetch(`${API_CONFIG.BASE_URL}/search?q=${encodeURIComponent(query.trim())}&page=${page}`);
+
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+
+      const data = await response.json();
+      
+      if (data.error || data.statusCode) {
+        throw new Error(data.error || data.message || 'An error occurred');
+      }
+      
+      return data;
+    } catch (error) {
+      throw handleNetworkError(error, 'Network error: Failed to search movies');
+    }
   },
 
   getFavorites: async (page: number = 1): Promise<FavoritesResponse> => {
-    // BUG: No error handling
-    const response = await fetch(`${API_BASE_URL}/favorites/list?page=${page}`);
-    
-    // BUG: Doesn't handle 404 properly - will crash
-    if (!response.ok) {
-      throw new Error('Failed to get favorites');
+    if (!Number.isInteger(page) || page < 1) {
+      throw new Error('Page must be a positive integer');
     }
-    
-    return response.json();
+
+    try {
+      const response = await fetch(`${API_CONFIG.BASE_URL}/favorites/list?page=${page}`);
+      
+      if (!response.ok) {
+        if (response.status === HTTP_STATUS.NOT_FOUND) {
+          return {
+            data: {
+              favorites: [],
+              count: 0,
+              totalResults: '0',
+              currentPage: page,
+              totalPages: 0,
+            },
+          };
+        }
+        await handleApiError(response);
+      }
+      
+      return response.json();
+    } catch (error) {
+      throw handleNetworkError(error, 'Network error: Failed to get favorites');
+    }
   },
 
   addToFavorites: async (movie: Movie): Promise<void> => {
-    // BUG: No validation that movie has required fields
-    const response = await fetch(`${API_BASE_URL}/favorites`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(movie),
-    });
-    
-    // BUG: Backend returns HttpException object (not thrown) when movie already exists
-    // This means response.status might be 200 but data contains error
-    // BUG: Doesn't check response.status properly - should check response.ok
-    if (response.status !== 200) {
-      const error = await response.json();
-      throw new Error(error.message || 'Failed to add movie to favorites');
+    if (!movie || !movie.imdbID || !movie.title) {
+      throw new Error('Movie must have imdbID and title');
     }
-    
-    // BUG: Even if status is 200, backend might return HttpException object in body
-    // Should check response body for error structure
+
+    const payload = {
+      title: movie.title,
+      imdbID: movie.imdbID,
+      year: movie.year ?? 0,
+      poster: movie.poster ?? '',
+    };
+
+    try {
+      const response = await fetch(`${API_CONFIG.BASE_URL}/favorites`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+
+      const data = await response.json().catch(() => null);
+      if (data?.error || data?.statusCode) {
+        const message = Array.isArray(data.message)
+          ? data.message.join(', ')
+          : data.message;
+        throw new Error(message || data.error || 'Failed to add movie to favorites');
+      }
+    } catch (error) {
+      throw handleNetworkError(error, 'Network error: Failed to add movie to favorites');
+    }
   },
 
   removeFromFavorites: async (imdbID: string): Promise<void> => {
-    // BUG: No validation
-    const response = await fetch(`${API_BASE_URL}/favorites/${imdbID}`, {
-      method: 'DELETE',
-    });
-    
-    // BUG: Doesn't check response.ok
-    if (response.status !== 200) {
-      throw new Error('Failed to remove movie from favorites');
+    if (!imdbID || typeof imdbID !== 'string' || !imdbID.trim()) {
+      throw new Error('imdbID is required and cannot be empty');
+    }
+
+    try {
+      const response = await fetch(`${API_CONFIG.BASE_URL}/favorites/${encodeURIComponent(imdbID.trim())}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+    } catch (error) {
+      throw handleNetworkError(error, 'Network error: Failed to remove movie from favorites');
     }
   },
 };

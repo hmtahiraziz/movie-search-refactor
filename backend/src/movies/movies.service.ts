@@ -1,101 +1,142 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { MovieDto } from './dto/movie.dto';
-import axios from 'axios';
+import { SearchMoviesResponseDto } from './dto/search-response.dto';
+import { FavoritesResponseDto } from './dto/favorites-response.dto';
+import { MessageResponseDto } from './dto/message-response.dto';
+import { OmdbMovie } from './dto/omdb-response.dto';
+import { MOVIES_CONSTANTS } from './constants/movies.constants';
+import { OmdbService } from './services/omdb.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class MoviesService {
-  private favorites: any[] = []; // BUG: Should be MovieDto[]
-  private readonly favoritesFilePath = path.join(process.cwd(), 'data', 'favorites.json');
-  
-  // BUG: Hardcoded API key fallback - security issue
-  private readonly baseUrl = `http://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY || 'demo123'}`;
+  private readonly logger = new Logger(MoviesService.name);
+  private favorites: MovieDto[] = [];
+  private favoritesLastModified: number = 0;
+  private readonly favoritesFilePath: string;
 
-  constructor() {
+  constructor(
+    private configService: ConfigService,
+    private omdbService: OmdbService,
+  ) {
+    const dataDir = path.join(process.cwd(), MOVIES_CONSTANTS.DATA_DIRECTORY);
+    this.favoritesFilePath = path.join(dataDir, MOVIES_CONSTANTS.FAVORITES_FILE_NAME);
+    
     this.loadFavorites();
   }
 
   private loadFavorites(): void {
-    // BUG: No error handling for file operations
-    if (fs.existsSync(this.favoritesFilePath)) {
-      const fileContent = fs.readFileSync(this.favoritesFilePath, 'utf-8');
-      this.favorites = JSON.parse(fileContent);
-    } else {
-      // BUG: Directory might not exist, will fail
+    try {
+      if (fs.existsSync(this.favoritesFilePath)) {
+        const fileStats = fs.statSync(this.favoritesFilePath);
+        if (fileStats.mtimeMs > this.favoritesLastModified) {
+          const fileContent = fs.readFileSync(this.favoritesFilePath, 'utf-8');
+          this.favorites = JSON.parse(fileContent);
+          this.favoritesLastModified = fileStats.mtimeMs;
+        }
+      } else {
+        this.ensureDataDirectoryExists();
+        this.favorites = [];
+        this.favoritesLastModified = Date.now();
+      }
+    } catch (error) {
+      this.logger.error('Error loading favorites', error);
       this.favorites = [];
     }
   }
 
-  private saveFavorites(): void {
-    // BUG: No directory creation check, no error handling
-    fs.writeFileSync(this.favoritesFilePath, JSON.stringify(this.favorites, null, 2));
+  private getFavoritesList(): MovieDto[] {
+    this.loadFavorites();
+    return this.favorites;
   }
 
-  async searchMovies(title: string, page: number = 1): Promise<any> {
-    // BUG: No input validation, no error handling
-    const response = await axios.get(
-      `${this.baseUrl}&s=${title}&plot=full&page=${page}`, // BUG: Missing encodeURIComponent
-    );
-    
-    // BUG: OMDb API returns Response: "False" (string) when no results, not a boolean
-    // This check will fail silently - Response field is always a string
-    if (response.data.Response === false || response.data.Error) {
-      return { movies: [], totalResults: '0' };
+  private ensureDataDirectoryExists(): void {
+    const dataDir = path.dirname(this.favoritesFilePath);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
-    
-    return {
-      movies: response.data.Search || [],
-      totalResults: response.data.totalResults || '0'
-    };
   }
 
-  async getMovieByTitle(title: string, page: number = 1) {
-    // BUG: No try-catch, will crash on API errors
-    const response = await this.searchMovies(title, page);
-    
-    // BUG: Inefficient - checking favorites on every search
-    // BUG: favorites array might be stale if file was modified externally
-    const formattedResponse = response.movies.map((movie: any) => {
-      // BUG: Case-sensitive comparison - some IDs might have different casing
-      const isFavorite = this.favorites.find(fav => fav.imdbID === movie.imdbID) !== undefined;
+  private saveFavorites(): void {
+    try {
+      this.ensureDataDirectoryExists();
+      fs.writeFileSync(this.favoritesFilePath, JSON.stringify(this.favorites, null, 2));
+      this.favoritesLastModified = Date.now();
+    } catch (error) {
+      this.logger.error('Error saving favorites', error);
+      throw new HttpException('Failed to save favorites', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async getMovieByTitle(title: string, page: number = MOVIES_CONSTANTS.DEFAULT_PAGE): Promise<SearchMoviesResponseDto> {
+    try {
+      const response = await this.omdbService.searchMovies(title, page);
+      const favorites = this.getFavoritesList();
+      const favoritesMap = new Map(favorites.map(fav => [fav.imdbID.toLowerCase(), fav]));
+      
+      const formattedResponse: MovieDto[] = response.movies.map((movie: OmdbMovie) => {
+        const isFavorite = favoritesMap.has(movie.imdbID.toLowerCase());
+        return {
+          title: movie.Title,
+          imdbID: movie.imdbID,
+          year: this.parseYear(movie.Year),
+          poster: movie.Poster,
+          isFavorite,
+        };
+      });
+      
       return {
-        title: movie.Title,
-        imdbID: movie.imdbID,
-        year: movie.Year, // BUG: Should parse to number, also handles "1999-2000" format incorrectly
-        poster: movie.Poster,
-        isFavorite,
+        data: {
+          movies: formattedResponse,
+          count: formattedResponse.length,
+          totalResults: response.totalResults,
+        },
       };
-    });
-    
-    return {
-      data: {
-        movies: formattedResponse,
-        count: formattedResponse.length,
-        totalResults: response.totalResults,
-      },
-    };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      this.logger.error('Error getting movies by title', error);
+      throw new HttpException('Failed to get movies by title', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
-  addToFavorites(movieToAdd: MovieDto) {
-    // BUG: No validation that movieToAdd has required fields
-    // BUG: Using find instead of some for performance
-    // BUG: Not reloading favorites from file - if file was modified, this array is stale
-    const foundMovie = this.favorites.find((movie) => movie.imdbID === movieToAdd.imdbID);
+  private parseYear(yearString: string): number {
+    if (!yearString) return 0;
+    // Extract first year from strings like "1999-2000" or "1999"
+    const match = yearString.match(/^\d{4}/);
+    return match ? parseInt(match[0], 10) : 0;
+  }
+
+  addToFavorites(movieToAdd: MovieDto): MessageResponseDto {
+    if (!movieToAdd || typeof movieToAdd !== 'object') {
+      throw new HttpException('Movie data is required', HttpStatus.BAD_REQUEST);
+    }
+    if (!movieToAdd.imdbID || !movieToAdd.title) {
+      throw new HttpException('Movie must have imdbID and title', HttpStatus.BAD_REQUEST);
+    }
+
+    const favorites = this.getFavoritesList();
+    const foundMovie = favorites.some((movie) => movie.imdbID.toLowerCase() === movieToAdd.imdbID.toLowerCase());
     if (foundMovie) {
-      // BUG: Returning error instead of throwing
-      return new HttpException(
+      throw new HttpException(
         'Movie already in favorites',
         HttpStatus.BAD_REQUEST,
       );
     }
     
-    // BUG: Not validating movie structure
-    // BUG: Not checking if movieToAdd has all required fields (poster might be missing)
-    this.favorites.push(movieToAdd);
+    const validatedMovie: MovieDto = {
+      title: movieToAdd.title,
+      imdbID: movieToAdd.imdbID,
+      year: movieToAdd.year || 0,
+      poster: movieToAdd.poster || '',
+    };
+    
+    this.favorites.push(validatedMovie);
     this.saveFavorites();
     
-    // BUG: Not reloading favorites after save - if save fails silently, state is inconsistent
     return {
       data: {
         message: 'Movie added to favorites',
@@ -103,19 +144,21 @@ export class MoviesService {
     };
   }
 
-  removeFromFavorites(movieId: string) {
-    // BUG: No validation that movieId is provided
-    const foundMovie = this.favorites.find((movie) => movie.imdbID === movieId);
-    if (!foundMovie) {
-      // BUG: Returning error instead of throwing
-      return new HttpException(
+  removeFromFavorites(movieId: string): MessageResponseDto {
+    if (!movieId || typeof movieId !== 'string' || !movieId.trim()) {
+      throw new HttpException('Movie ID is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const favorites = this.getFavoritesList();
+    const foundIndex = favorites.findIndex((movie) => movie.imdbID.toLowerCase() === movieId.toLowerCase());
+    if (foundIndex === -1) {
+      throw new HttpException(
         'Movie not found in favorites',
         HttpStatus.NOT_FOUND,
       );
     }
     
-    // BUG: Inefficient - using filter creates new array
-    this.favorites = this.favorites.filter((movie) => movie.imdbID !== movieId);
+    this.favorites.splice(foundIndex, 1);
     this.saveFavorites();
     
     return {
@@ -125,29 +168,39 @@ export class MoviesService {
     };
   }
 
-  getFavorites(page: number = 1, pageSize: number = 10) {
-    // BUG: Not reloading favorites from file - might be stale
-    // BUG: Throwing error when empty instead of returning empty array
-    if (this.favorites.length === 0) {
-      throw new HttpException('No favorites found', HttpStatus.NOT_FOUND);
+  getFavorites(page: number = MOVIES_CONSTANTS.DEFAULT_PAGE, pageSize: number = MOVIES_CONSTANTS.DEFAULT_PAGE_SIZE): FavoritesResponseDto {
+    const favorites = this.getFavoritesList();
+    
+    if (favorites.length === 0) {
+      return {
+        data: {
+          favorites: [],
+          count: 0,
+          totalResults: '0',
+          currentPage: page,
+          totalPages: 0,
+        },
+      };
     }
     
-    // BUG: No validation that page is positive
-    // BUG: No validation that pageSize is positive
-    // BUG: If page is 0 or negative, startIndex becomes negative and slice behaves unexpectedly
+    if (!Number.isInteger(page) || page < MOVIES_CONSTANTS.MIN_PAGE) {
+      throw new HttpException('Page must be a positive integer', HttpStatus.BAD_REQUEST);
+    }
+    if (!Number.isInteger(pageSize) || pageSize < MOVIES_CONSTANTS.MIN_PAGE_SIZE) {
+      throw new HttpException('Page size must be a positive integer', HttpStatus.BAD_REQUEST);
+    }
+    
     const startIndex = (page - 1) * pageSize;
     const endIndex = startIndex + pageSize;
-    const paginatedFavorites = this.favorites.slice(startIndex, endIndex);
+    const paginatedFavorites = favorites.slice(startIndex, endIndex);
     
-    // BUG: Inconsistent response structure
-    // BUG: totalResults is number but should be string to match search API response
     return {
       data: {
         favorites: paginatedFavorites,
         count: paginatedFavorites.length,
-        totalResults: this.favorites.length, // BUG: Should be string to match API
+        totalResults: String(favorites.length),
         currentPage: page,
-        totalPages: Math.ceil(this.favorites.length / pageSize),
+        totalPages: Math.ceil(favorites.length / pageSize),
       },
     };
   }

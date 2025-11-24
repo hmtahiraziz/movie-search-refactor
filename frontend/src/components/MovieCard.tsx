@@ -1,25 +1,33 @@
 import { Movie } from "@/types/movie";
+import { memo, useState } from "react";
+import Image from "next/image";
 
 interface MovieCardProps {
   movie: Movie;
   isFavorite: boolean;
   onToggleFavorite: (movie: Movie) => void;
+  isMutating?: boolean;
 }
 
-// BUG: Not using React.memo for performance
-const MovieCard = ({ movie, isFavorite, onToggleFavorite }: MovieCardProps) => {
+const MovieCard = memo(({ movie, isFavorite, onToggleFavorite, isMutating = false }: MovieCardProps) => {
+  const [imageError, setImageError] = useState(false);
+
+  const handleImageError = () => {
+    setImageError(true);
+  };
+
   return (
     <div className="group relative bg-white rounded-lg overflow-hidden hover:mouse-pointer shadow-md hover:shadow-lg transition-all duration-300 hover:-translate-y-1">
       <div className="relative aspect-[2/3] overflow-hidden">
-        {/* BUG: No error handling for broken images */}
-        {/* BUG: If poster URL is invalid or 404, image fails to load but no fallback */}
-        {/* BUG: Poster might be empty string "", which passes the check but shows broken image */}
-        {movie.poster && movie.poster !== "N/A" ? (
-          <img
+        {movie.poster && movie.poster !== "N/A" && movie.poster.trim() !== "" && !imageError ? (
+          <Image
             src={movie.poster}
             alt={movie.title}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            // BUG: No onError handler for failed image loads
+            fill
+            className="object-cover group-hover:scale-105 transition-transform duration-300"
+            onError={handleImageError}
+            sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+            unoptimized
           />
         ) : (
           <div className="w-full h-full bg-gray-100 flex items-center justify-center">
@@ -34,23 +42,25 @@ const MovieCard = ({ movie, isFavorite, onToggleFavorite }: MovieCardProps) => {
         
         <button
           onClick={() => onToggleFavorite(movie)}
-          // BUG: No loading state, can be clicked multiple times
-          // BUG: No disabled state during mutation - rapid clicks cause race conditions
-          // BUG: If mutation is in progress, button should be disabled
+          disabled={isMutating}
           className={`absolute top-2 right-2 p-2 rounded-full transition-all duration-200 ${
             isFavorite
               ? "bg-red-500 text-white hover:bg-red-600"
               : "bg-white/80 text-gray-600 hover:bg-white hover:text-red-500"
-          }`}
+          } ${isMutating ? "opacity-50 cursor-not-allowed" : ""}`}
         >
-          <svg 
-            className={`h-4 w-4 ${isFavorite ? "fill-current" : ""}`} 
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-          </svg>
+          {isMutating ? (
+            <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <svg 
+              className={`h-4 w-4 ${isFavorite ? "fill-current" : ""}`} 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+            </svg>
+          )}
         </button>
       </div>
 
@@ -69,7 +79,9 @@ const MovieCard = ({ movie, isFavorite, onToggleFavorite }: MovieCardProps) => {
       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 pointer-events-none" />
     </div>
   );
-};
+});
+
+MovieCard.displayName = 'MovieCard';
 
 export default MovieCard;
 
