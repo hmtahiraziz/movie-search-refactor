@@ -1,18 +1,74 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Input } from "./ui/input";
+import { SEARCH } from "@/constants";
 
 interface SearchBarProps {
-  onSearch: (query: string) => void;
+  onSearch: (query: string, resetPage?: boolean) => void;
+  debounceMs?: number;
+  initialValue?: string;
 }
 
-const SearchBar = ({ onSearch }: SearchBarProps) => {
-  const [query, setQuery] = useState("");
+const SearchBar = ({ onSearch, debounceMs = SEARCH.DEBOUNCE_DELAY_MS, initialValue = "" }: SearchBarProps) => {
+  const [query, setQuery] = useState(initialValue);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastInitialValueRef = useRef(initialValue);
+  const isSyncingRef = useRef(false);
+  const isInitialMountRef = useRef(true);
+
+  useEffect(() => {
+    if (initialValue !== lastInitialValueRef.current) {
+      isSyncingRef.current = true;
+      lastInitialValueRef.current = initialValue;
+      setQuery(initialValue);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      setTimeout(() => {
+        isSyncingRef.current = false;
+      }, SEARCH.SYNC_DELAY_MS);
+    }
+  }, [initialValue]);
+
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+
+    if (isSyncingRef.current) {
+      return;
+    }
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    const trimmedQuery = query.trim();
+    const isUserTyping = query !== lastInitialValueRef.current;
+    
+    if (trimmedQuery.length > 0) {
+      debounceTimerRef.current = setTimeout(() => {
+        onSearch(trimmedQuery, isUserTyping);
+      }, debounceMs);
+    } else if (isUserTyping) {
+      onSearch("", true);
+    }
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [query, onSearch, debounceMs]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // BUG: No validation, empty strings can be submitted
-    if (query) {
-      onSearch(query);
+    const trimmedQuery = query.trim();
+    if (trimmedQuery && trimmedQuery.length > 0) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      onSearch(trimmedQuery, true);
     }
   };
 

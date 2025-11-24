@@ -1,4 +1,6 @@
 import { Button } from "./ui/button";
+import { useMemo } from "react";
+import { calculatePaginationRange } from "@/utils/paginationUtils";
 
 const ChevronLeft = ({ className }: { className?: string }) => (
   <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -19,16 +21,9 @@ interface PaginationProps {
 }
 
 const Pagination = ({ currentPage, totalPages, onPageChange }: PaginationProps) => {
-  const maxVisiblePages = 5;
-  const halfVisible = Math.floor(maxVisiblePages / 2);
-
-  let startPage = Math.max(1, currentPage - halfVisible);
-  const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
-
-  // BUG: Complex logic, could be simplified
-  if (endPage - startPage + 1 < maxVisiblePages) {
-    startPage = Math.max(1, endPage - maxVisiblePages + 1);
-  }
+  const { startPage, endPage, showStartEllipsis, showEndEllipsis } = useMemo(() => {
+    return calculatePaginationRange(currentPage, totalPages);
+  }, [currentPage, totalPages]);
 
   const pages = Array.from(
     { length: endPage - startPage + 1 },
@@ -46,7 +41,6 @@ const Pagination = ({ currentPage, totalPages, onPageChange }: PaginationProps) 
         <ChevronLeft className="h-4 w-4" />
       </Button>
 
-      {/* BUG: Complex conditional rendering */}
       {startPage > 1 && (
         <>
           <Button
@@ -55,7 +49,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }: PaginationProps) 
           >
             1
           </Button>
-          {startPage > 2 && <span className="text-muted-foreground">...</span>}
+          {showStartEllipsis && <span className="text-muted-foreground">...</span>}
         </>
       )}
 
@@ -72,7 +66,7 @@ const Pagination = ({ currentPage, totalPages, onPageChange }: PaginationProps) 
 
       {endPage < totalPages && (
         <>
-          {endPage < totalPages - 1 && <span className="text-muted-foreground">...</span>}
+          {showEndEllipsis && <span className="text-muted-foreground">...</span>}
           <Button
             variant="secondary"
             onClick={() => onPageChange(totalPages)}
