@@ -1,43 +1,51 @@
-import { Controller, Get, Post, Delete, Param, Query, Body } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Query, Body, ValidationPipe, HttpException, HttpStatus } from '@nestjs/common';
 import { MoviesService } from './movies.service';
-import { MovieDto } from './dto/movie.dto';
+import { SearchMoviesResponseDto } from './dto/search-response.dto';
+import { FavoritesResponseDto } from './dto/favorites-response.dto';
+import { MessageResponseDto } from './dto/message-response.dto';
+import { SearchQueryDto } from './dto/search-query.dto';
+import { FavoritesQueryDto } from './dto/favorites-query.dto';
+import { AddFavoriteDto } from './dto/add-favorite.dto';
 
 @Controller('movies')
 export class MoviesController {
   constructor(private readonly moviesService: MoviesService) {}
 
   @Get('search')
-  async searchMovies(@Query('q') query: string, @Query('page') page?: string) {
-    // BUG: Not validating query parameter
-    // BUG: Not handling missing query - will pass undefined to service
-    // BUG: If query is empty string, service will make API call with empty search
-    const pageNumber = page ? parseInt(page, 10) : 1;
-    // BUG: No validation that pageNumber is valid (NaN, negative, or 0)
-    // BUG: If page is "abc", parseInt returns NaN and service receives NaN
-    return await this.moviesService.getMovieByTitle(query, pageNumber);
+  async searchMovies(
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) queryDto: SearchQueryDto,
+  ): Promise<SearchMoviesResponseDto> {
+    const page = queryDto.page || 1;
+    return await this.moviesService.getMovieByTitle(queryDto.q.trim(), page);
   }
 
   @Post('favorites')
-  addToFavorites(@Body() movieToAdd: MovieDto) {
-    // BUG: No validation decorators
-    // BUG: Not checking if movieToAdd is null/undefined
-    return this.moviesService.addToFavorites(movieToAdd);
+  addToFavorites(
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })) movieToAdd: AddFavoriteDto,
+  ): MessageResponseDto {
+    const movieDto = {
+      title: movieToAdd.title,
+      imdbID: movieToAdd.imdbID,
+      year: movieToAdd.year || 0,
+      poster: movieToAdd.poster || '',
+    };
+    return this.moviesService.addToFavorites(movieDto);
   }
 
   @Delete('favorites/:imdbID')
-  removeFromFavorites(@Param('imdbID') imdbID: string) {
-    // BUG: No validation
-    return this.moviesService.removeFromFavorites(imdbID);
+  removeFromFavorites(@Param('imdbID') imdbID: string): MessageResponseDto {
+    if (!imdbID || typeof imdbID !== 'string' || !imdbID.trim()) {
+      throw new HttpException('imdbID parameter is required and cannot be empty', HttpStatus.BAD_REQUEST);
+    }
+    return this.moviesService.removeFromFavorites(imdbID.trim());
   }
 
   @Get('favorites/list')
-  getFavorites(@Query('page') page?: string) {
-    // BUG: No error handling if page is invalid
-    // BUG: If page is "0" or negative, service will return wrong results
-    // BUG: If page is "abc", parseInt returns NaN, service receives NaN
-    const pageNumber = page ? parseInt(page, 10) : 1;
-    // BUG: Not handling case where service throws HttpException for empty favorites
-    return this.moviesService.getFavorites(pageNumber);
+  async getFavorites(
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) queryDto: FavoritesQueryDto,
+  ): Promise<FavoritesResponseDto> {
+    const page = queryDto.page || 1;
+    return await this.moviesService.getFavorites(page);
   }
 
 }
